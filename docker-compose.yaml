@@ -1,0 +1,114 @@
+services:
+  redis:
+    image: redis
+    command:
+      - /bin/sh
+      - -c
+      - redis-server --requirepass redispass
+    container_name: paperless-ngx-redis
+    hostname: paper-redis
+    mem_reservation: 256m
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    user: 1000:10
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping || exit 1"]
+    volumes:
+      - /volume1/docker/paperless-ngx/redis:/data:rw
+    environment:
+      TZ: Europe/Berlin
+    restart: on-failure:5
+
+  db:
+    image: postgres
+    container_name: paperless-ngx-db
+    hostname: paper-db
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "pg_isready", "-q", "-d", "paperless", "-U", "paperlessuser"]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+    volumes:
+      - /volume1/docker/paperless-ngx/db:/var/lib/postgresql/data:rw
+    environment:
+      POSTGRES_DB: paperlessdb
+      POSTGRES_USER: dbuser
+      POSTGRES_PASSWORD: {{Password}}
+    restart: on-failure:5
+
+  gotenberg:
+    image: gotenberg/gotenberg:latest
+    container_name: paperless-ngx-gotenberg
+    hostname: gotenberg
+    security_opt:
+      - no-new-privileges:true
+    user: 1000:10
+    command:
+      - "gotenberg"
+      - "--chromium-disable-javascript=true"
+      - "--chromium-allow-list=file:///tmp/.*"
+    restart: on-failure:5
+
+  tika:
+    image: ghcr.io/paperless-ngx/tika:latest
+    container_name: paperless-ngx-tika
+    hostname: tika
+    security_opt:
+      - no-new-privileges:true
+    user: 1000:10
+    restart: on-failure:5
+
+  paperless:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    container_name: paperless-ngx
+    hostname: paperless-ngx
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "-S", "--max-time", "2", "http://localhost:8000"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    ports:
+      - 8777:8000
+    volumes:
+      - /volume1/docker/paperlessngx/data:/usr/src/paperless/data:rw
+      - /volume1/docker/paperlessngx/media:/usr/src/paperless/media:rw
+      - /volume1/docker/paperlessngx/export:/usr/src/paperless/export:rw
+      - /volume1/docker/paperlessngx/consume:/usr/src/paperless/consume:rw
+      - /volume1/docker/paperlessngx/trash:/usr/src/paperless/trash:rw
+    environment:
+      PAPERLESS_REDIS: redis://:redispass@paper-redis:6379
+      PAPERLESS_DBENGINE: postgresql
+      PAPERLESS_DBHOST: paper-db
+      PAPERLESS_DBNAME: paperlessdb
+      PAPERLESS_DBUSER: dbuser
+      PAPERLESS_DBPASS: {{Password}}
+      PAPERLESS_EMPTY_TRASH_DIR: ../trash
+      PAPERLESS_FILENAME_FORMAT: '{{ created_year }}/{{ correspondent }}/{{ document_type }}/{{ title }}'
+      PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD: 6
+      PAPERLESS_TASK_WORKERS: 1
+      USERMAP_UID: 1000
+      USERMAP_GID: 10
+      PAPERLESS_TIME_ZONE: Europe/Berlin
+      PAPERLESS_ADMIN_USER: admin
+      PAPERLESS_ADMIN_PASSWORD: {{Password}}
+      PAPERLESS_URL: http://192.168.1.152
+      PAPERLESS_CSRF_TRUSTED_ORIGINS: http://192.168.1.152
+      PAPERLESS_OCR_LANGUAGE: deu+eng
+      PAPERLESS_TIKA_ENABLED: 1
+      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
+      PAPERLESS_TIKA_ENDPOINT: http://tika:9998
+    restart: on-failure:5
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      tika:
+        condition: service_started
+      gotenberg:
+        condition: service_started
